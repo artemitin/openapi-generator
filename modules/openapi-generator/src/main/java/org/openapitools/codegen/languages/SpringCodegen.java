@@ -21,6 +21,7 @@ import com.samskivert.mustache.Mustache;
 import io.swagger.v3.oas.models.OpenAPI;
 import io.swagger.v3.oas.models.Operation;
 import io.swagger.v3.oas.models.PathItem;
+import org.apache.commons.lang3.StringUtils;
 import org.apache.commons.lang3.tuple.Pair;
 import org.openapitools.codegen.*;
 import org.openapitools.codegen.languages.features.BeanValidationFeatures;
@@ -71,6 +72,8 @@ public class SpringCodegen extends AbstractJavaCodegen
     public static final String HATEOAS = "hateoas";
     public static final String RETURN_SUCCESS_CODE = "returnSuccessCode";
     public static final String UNHANDLED_EXCEPTION_HANDLING = "unhandledException";
+
+    public static final String SERIALIZATION_LIBRARY_JACKSON = "jackson";
 
     public static final String OPEN_BRACE = "{";
     public static final String CLOSE_BRACE = "}";
@@ -135,6 +138,8 @@ public class SpringCodegen extends AbstractJavaCodegen
         modelPackage = "org.openapitools.model";
         invokerPackage = "org.openapitools.api";
         artifactId = "openapi-spring";
+        useOneOfInterfaces = true;
+        addOneOfInterfaceImports = true;
 
         // clioOptions default redefinition need to be updated
         updateOption(CodegenConstants.INVOKER_PACKAGE, this.getInvokerPackage());
@@ -179,7 +184,6 @@ public class SpringCodegen extends AbstractJavaCodegen
         CliOption library = new CliOption(CodegenConstants.LIBRARY, CodegenConstants.LIBRARY_DESC).defaultValue(SPRING_BOOT);
         library.setEnum(supportedLibraries);
         cliOptions.add(library);
-
     }
 
     private void updateJava8CliOptions() {
@@ -860,6 +864,95 @@ public class SpringCodegen extends AbstractJavaCodegen
         }
 
         return objs;
+    }
+
+    @SuppressWarnings("unchecked")
+    @Override
+    public Map<String, Object> postProcessModels(Map<String, Object> objs) {
+        objs = super.postProcessModels(objs);
+        List<Object> models = (List<Object>) objs.get("models");
+
+        if (additionalProperties.containsKey(SERIALIZATION_LIBRARY_JACKSON)) {
+            List<Map<String, String>> imports = (List<Map<String, String>>) objs.get("imports");
+            for (Object _mo : models) {
+                Map<String, Object> mo = (Map<String, Object>) _mo;
+                CodegenModel cm = (CodegenModel) mo.get("model");
+                boolean addImports = false;
+
+                for (CodegenProperty var : cm.vars) {
+                    if (this.openApiNullable) {
+                        boolean isOptionalNullable = Boolean.FALSE.equals(var.required) && Boolean.TRUE.equals(var.isNullable);
+                        // only add JsonNullable and related imports to optional and nullable values
+                        addImports |= isOptionalNullable;
+                        var.getVendorExtensions().put("x-is-jackson-optional-nullable", isOptionalNullable);
+                    }
+
+                    if (Boolean.TRUE.equals(var.getVendorExtensions().get("x-enum-as-string"))) {
+                        // treat enum string as just string
+                        var.datatypeWithEnum = var.dataType;
+
+                        if (StringUtils.isNotEmpty(var.defaultValue)) { // has default value
+                            String defaultValue = var.defaultValue.substring(var.defaultValue.lastIndexOf('.') + 1);
+                            for (Map<String, Object> enumVars : (List<Map<String, Object>>) var.getAllowableValues().get("enumVars")) {
+                                if (defaultValue.equals(enumVars.get("name"))) {
+                                    // update default to use the string directly instead of enum string
+                                    var.defaultValue = (String) enumVars.get("value");
+                                }
+                            }
+                        }
+
+                        // add import for Set, HashSet
+                        cm.imports.add("Set");
+                        Map<String, String> importsSet = new HashMap<String, String>();
+                        importsSet.put("import", "java.util.Set");
+                        imports.add(importsSet);
+                        Map<String, String> importsHashSet = new HashMap<String, String>();
+                        importsHashSet.put("import", "java.util.HashSet");
+                        imports.add(importsHashSet);
+                    }
+
+                }
+
+                if (addImports) {
+                    Map<String, String> imports2Classnames = new HashMap<>();
+                    imports2Classnames.put("JsonNullable", "org.openapitools.jackson.nullable.JsonNullable");
+                    imports2Classnames.put("NoSuchElementException", "java.util.NoSuchElementException");
+                    imports2Classnames.put("JsonIgnore", "com.fasterxml.jackson.annotation.JsonIgnore");
+                    for (Map.Entry<String, String> entry : imports2Classnames.entrySet()) {
+                        cm.imports.add(entry.getKey());
+                        Map<String, String> importsItem = new HashMap<String, String>();
+                        importsItem.put("import", entry.getValue());
+                        imports.add(importsItem);
+                    }
+                }
+            }
+        }
+
+        // add implements for serializable/parcelable to all models
+        for (Object _mo : models) {
+            Map<String, Object> mo = (Map<String, Object>) _mo;
+            CodegenModel cm = (CodegenModel) mo.get("model");
+
+            cm.getVendorExtensions().putIfAbsent("x-implements", new ArrayList<String>());
+            if (this.serializableModel) {
+                ((ArrayList<String>) cm.getVendorExtensions().get("x-implements")).add("Serializable");
+            }
+        }
+
+        return objs;
+    }
+
+    @Override
+    public void addImportsToOneOfInterface(List<Map<String, String>> imports) {
+        if (additionalProperties.containsKey(SERIALIZATION_LIBRARY_JACKSON)) {
+            for (String i : Arrays.asList("JsonSubTypes", "JsonTypeInfo")) {
+                Map<String, String> oneImport = new HashMap<>();
+                oneImport.put("import", importMapping.get(i));
+                if (!imports.contains(oneImport)) {
+                    imports.add(oneImport);
+                }
+            }
+        }
     }
 
     public void setUseBeanValidation(boolean useBeanValidation) {
