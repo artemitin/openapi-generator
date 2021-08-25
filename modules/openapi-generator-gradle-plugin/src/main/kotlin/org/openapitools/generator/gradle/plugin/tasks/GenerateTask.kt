@@ -18,7 +18,6 @@ package org.openapitools.generator.gradle.plugin.tasks
 
 import org.gradle.api.DefaultTask
 import org.gradle.api.GradleException
-import org.gradle.api.provider.Property
 import org.gradle.api.tasks.CacheableTask
 import org.gradle.api.tasks.Input
 import org.gradle.api.tasks.InputFile
@@ -38,6 +37,8 @@ import org.openapitools.codegen.CodegenConstants
 import org.openapitools.codegen.DefaultGenerator
 import org.openapitools.codegen.config.CodegenConfigurator
 import org.openapitools.codegen.config.GlobalSettings
+import org.openapitools.generator.gradle.plugin.service.PropertyHandler.Companion.ifNotEmpty
+import org.openapitools.generator.gradle.plugin.service.SpecificationHandler
 
 /**
  * A task which generates the desired code.
@@ -91,9 +92,17 @@ open class GenerateTask : DefaultTask() {
     /**
      * The Open API 2.0/3.x specification location.
      */
+    @Optional
     @get:InputFile
     @PathSensitive(PathSensitivity.RELATIVE)
     val inputSpec = project.objects.property<String>()
+
+    /**
+     * The Open API 2.0/3.x specification location in remote source.
+     */
+    @Optional
+    @Input
+    val remoteSpec = project.objects.property<String?>()
 
     /**
      * The template directory holding a custom template.
@@ -451,23 +460,6 @@ open class GenerateTask : DefaultTask() {
     @Input
     val engine = project.objects.property<String?>()
 
-    private fun <T : Any?> Property<T>.ifNotEmpty(block: Property<T>.(T) -> Unit) {
-        if (isPresent) {
-            val item: T? = get()
-            if (item != null) {
-                when (get()) {
-                    is String -> if ((get() as String).isNotEmpty()) {
-                        block(get())
-                    }
-                    is String? -> if (true == (get() as String?)?.isNotEmpty()) {
-                        block(get())
-                    }
-                    else -> block(get())
-                }
-            }
-        }
-    }
-
     @Suppress("unused")
     @TaskAction
     fun doWork() {
@@ -531,10 +523,6 @@ open class GenerateTask : DefaultTask() {
 
             skipOverwrite.ifNotEmpty { value ->
                 configurator.setSkipOverwrite(value ?: false)
-            }
-
-            inputSpec.ifNotEmpty { value ->
-                configurator.setInputSpec(value)
             }
 
             generatorName.ifNotEmpty { value ->
@@ -646,6 +634,9 @@ open class GenerateTask : DefaultTask() {
                     configurator.setTemplatingEngineName("handlebars")
                 }
             }
+
+            val spec = SpecificationHandler.getInputSpec(inputSpec = inputSpec, remoteSpec = remoteSpec)
+            configurator.setInputSpec(spec)
 
             if (globalProperties.isPresent) {
                 globalProperties.get().forEach { entry ->
